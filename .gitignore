@@ -13,6 +13,7 @@ android/captures/
 # ---- Kotlin / Java ----
 *.class
 *.iml
+android/.kotlin/
 
 # ---- PlatformIO / ESP32 firmware ----
 firmware/.pio/

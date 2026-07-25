@@ -20,6 +20,27 @@ The uploaded item named `sp6b.gps 2` is an Apple File Provider metadata object, 
 - `tools/controller_simulator.py` — desktop simulator for protocol testing.
 - `tests/test_protocol.py` — protocol framing tests.
 
+## Building & testing
+
+Progress is tracked in [PHASES_PLAN.md](PHASES_PLAN.md) (7 phases to production). Phases 1–2 are complete and verified locally.
+
+**Prerequisites:** JDK 17 (Android/Gradle does not support JDK 25), a real python.org Python (the Microsoft Store Python breaks PlatformIO), and the Android SDK (build-tools 35, platform 35).
+
+```bash
+# Android app  (produces app/build/outputs/apk/debug/app-debug.apk)
+cd android && ./gradlew assembleDebug
+
+# Android transport unit tests  (13 tests)
+cd android && ./gradlew testDebugUnitTest
+
+# ESP32 firmware  (produces .pio/build/esp32dev/firmware.bin)
+cd firmware && pio run -e esp32dev
+
+# Protocol + safety + transport tests  (25 tests)
+python -m pip install -r tools/requirements.txt
+python -m pytest tests/ -v
+```
+
 ## Safety position
 
 The tablet does not directly drive hydraulics. The ESP32 controller owns the watchdog, command timeout, output limits, neutral state, and emergency-stop input. Field use still requires proper hydraulic engineering, machine-specific commissioning, and independent safety review.

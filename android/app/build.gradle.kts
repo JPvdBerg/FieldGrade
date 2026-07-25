@@ -20,6 +20,14 @@ android {
     buildFeatures { compose = true }
     // Kotlin 2.0: Compose compiler version is governed by the kotlin.plugin.compose
     // plugin, so the old composeOptions{kotlinCompilerExtensionVersion} block is gone.
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {

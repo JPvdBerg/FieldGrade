@@ -56,6 +56,23 @@ def encode_command(seq, mode, target_mm=0, manual=0, enable=False, ts_ms=0, v=1)
     return _canonical(v, seq, ts_ms, mode, target_mm, manual, enable, crc)
 
 
+def _canonical_status(v, seq_ack, state, output, supply_mv, estop, fault, age_ms, crc16) -> str:
+    """Reproduce the controller's canonical status JSON exactly (field order,
+    no spaces, lowercase booleans). Used for encoding and CRC verification."""
+    return (
+        '{"v":%d,"seq_ack":%d,"state":"%s","output":%d,"supply_mv":%d,'
+        '"estop":%s,"fault":%d,"age_ms":%d,"crc16":%d}'
+    ) % (v, seq_ack, state, output, supply_mv,
+         "true" if estop else "false", fault, age_ms, crc16)
+
+
+def encode_status(seq_ack, state, output, supply_mv, estop, fault, age_ms, v=1) -> str:
+    """Build a status wire frame with a valid CRC (mirrors firmware emitStatus)."""
+    payload = _canonical_status(v, seq_ack, state, output, supply_mv, estop, fault, age_ms, 0)
+    crc = crc16_ccitt(payload.encode("utf-8"))
+    return _canonical_status(v, seq_ack, state, output, supply_mv, estop, fault, age_ms, crc)
+
+
 @dataclass
 class Config:
     max_duty: int = 820
@@ -195,10 +212,17 @@ class ReferenceController:
             "seq_ack": self.last_seq,
             "state": self.state,
             "output": self.applied,
+            "supply_mv": 0,
             "estop": self.estop,
             "fault": self.fault,
             "age_ms": max(0, self.now_ms - self.last_valid_ms),
         }
+
+    def status_line(self) -> str:
+        """CRC-protected status wire frame (what the controller actually sends)."""
+        s = self.status()
+        return encode_status(s["seq_ack"], s["state"], s["output"], s["supply_mv"],
+                             s["estop"], s["fault"], s["age_ms"])
 
 
 def main() -> None:
@@ -212,7 +236,7 @@ def main() -> None:
         ctrl.on_frame(line)
         t += 10
         ctrl.tick(t)
-        print(json.dumps(ctrl.status()), flush=True)
+        print(ctrl.status_line(), flush=True)
 
 
 if __name__ == "__main__":

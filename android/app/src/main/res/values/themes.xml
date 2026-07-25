@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose app: the Composable content supplies the real theming (MaterialTheme).
+         This host theme only needs to be a no-action-bar framework theme, so we avoid
+         a dependency on the View-based com.google.android.material library. -->
+    <style name="Theme.FieldGrade" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

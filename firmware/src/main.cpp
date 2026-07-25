@@ -119,18 +119,29 @@ static bool parseCommand(const String& line) {
   return true;
 }
 
+static int canonicalStatus(char* buf, size_t n, long seq_ack, const char* state,
+                           int output, int supply_mv, bool estop, int fault,
+                           long age_ms, unsigned crc) {
+  return snprintf(buf, n,
+    "{\"v\":%d,\"seq_ack\":%ld,\"state\":\"%s\",\"output\":%d,\"supply_mv\":%d,"
+    "\"estop\":%s,\"fault\":%d,\"age_ms\":%ld,\"crc16\":%u}",
+    PROTO_VERSION, seq_ack, state, output, supply_mv,
+    estop ? "true" : "false", fault, age_ms, crc);
+}
+
 static void emitStatus() {
-  const char* state = (digitalRead(PIN_ESTOP) == LOW) ? "ESTOP"
-                    : (appliedOutput != 0)            ? "ACTIVE" : "NEUTRAL";
-  JsonDocument doc;
-  doc["v"]       = PROTO_VERSION;
-  doc["seq_ack"] = lastSeq;
-  doc["state"]   = state;
-  doc["output"]  = appliedOutput;
-  doc["estop"]   = (digitalRead(PIN_ESTOP) == LOW);
-  doc["fault"]   = faultCode;
-  doc["age_ms"]  = (long)(millis() - lastValidCommandMs);
-  serializeJson(doc, Serial);
+  bool estop = (digitalRead(PIN_ESTOP) == LOW);
+  const char* state = estop ? "ESTOP" : (appliedOutput != 0) ? "ACTIVE" : "NEUTRAL";
+  int supply_mv = 0;  // placeholder until the supply-voltage divider is instrumented
+  long age = (long)(millis() - lastValidCommandMs);
+
+  char buf[224];
+  int len = canonicalStatus(buf, sizeof(buf), lastSeq, state, appliedOutput,
+                            supply_mv, estop, faultCode, age, 0);
+  uint16_t crc = (len > 0) ? crc16Ccitt((const uint8_t*)buf, (size_t)len) : 0;
+  canonicalStatus(buf, sizeof(buf), lastSeq, state, appliedOutput,
+                  supply_mv, estop, faultCode, age, crc);
+  Serial.print(buf);
   Serial.print('\n');
 }
 

@@ -24,8 +24,23 @@ Fields:
 ## Status frame
 
 ```json
-{"v":1,"seq_ack":1042,"state":"ACTIVE","output":-274,"supply_mv":13780,"estop":false,"fault":0,"age_ms":34}
+{"v":1,"seq_ack":1042,"state":"ACTIVE","output":-274,"supply_mv":13780,"estop":false,"fault":0,"age_ms":34,"crc16":45678}
 ```
+
+Fields:
+
+- `v`: protocol version.
+- `seq_ack`: sequence number of the last accepted command.
+- `state`: `NEUTRAL`, `ACTIVE`, or `ESTOP`.
+- `output`: signed applied duty.
+- `supply_mv`: measured supply voltage in millivolts (0 until instrumented).
+- `estop`: hardware emergency-stop input state.
+- `fault`: current fault code (see below).
+- `age_ms`: milliseconds since the last accepted command.
+- `crc16`: CRC-16/CCITT over the canonical status payload with `crc16` set to 0.
+  The tablet verifies this and drops any status frame that fails, so link
+  corruption can never be read as a valid controller state. (v0.1 refinement:
+  the status direction is CRC-protected too, symmetric with commands.)
 
 ## Mandatory controller rules
 

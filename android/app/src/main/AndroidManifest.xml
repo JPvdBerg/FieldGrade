@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-feature android:name="android.hardware.usb.host" />
-    <application android:theme="@style/Theme.Material3.DayNight.NoActionBar" android:label="FieldGrade">
+    <application android:theme="@style/Theme.FieldGrade" android:label="FieldGrade">
         <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

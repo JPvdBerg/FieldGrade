@@ -146,7 +146,8 @@ A green Tier-A result is progress, never final sign-off for anything behind the 
 
 ## Progress log
 
-- **Phase 1:** ✅ **Tier A complete (2026-07-25)** — all software-validatable DoD items green. Tier B (on-device compile + bench HIL) carried to the programmer. See execution log below.
+- **Phase 1:** ✅ **Tier A complete + Tier B compiles verified (2026-07-25)** — 22 Python tests green; Android APK builds; firmware compiles. Only bench HIL (real ESP32) remains. See Phase 1 execution log below.
+- **Phase 2:** ✅ **Tier A complete (2026-07-25)** — tablet transport built and validated: 13 Kotlin unit tests + 3 Python integration tests green. Tier B (30-min live session vs real ESP32) carried to hardware. See Phase 2 execution log below.
 
 ---
 
@@ -177,14 +178,48 @@ A green Tier-A result is progress, never final sign-off for anything behind the 
 ### Decision recorded (design refinement)
 **Command timeout hard-zeros the output, same as e-stop** (previously assumed to ramp down). Rationale: a slew ramp from full duty (~460 ms) cannot satisfy the acceptance test *"neutral within 250 ms of communication loss."* Comms loss is a fault of the same safety class as e-stop; motion must stop, not coast. The slew limiter now applies only to normal in-control transitions. A single bad frame in a healthy stream still ramps (next good frame re-enables within ~20 ms); persistent bad frames hit the 250 ms timeout and hard-zero. PROJECT_PLAN §5.1(d) updated to match.
 
-### Tier B — still owed on the programmer's machine / bench (NOT validated here)
-No Android SDK, Gradle, or PlatformIO in the dev environment, so these carry forward:
-- [ ] `./gradlew assembleDebug` produces an installable APK from a fresh clone.
-- [ ] `pio run -e esp32dev` compiles the firmware.
-- [ ] **Bench HIL (the true M1 safety sign-off):** on a real ESP32 with LEDs/scope on the outputs, demonstrate e-stop, comms-loss, bad-CRC, replay, and malformed-frame all force neutral, and that raise/lower never overlap. This is the milestone that authorises moving toward hydraulics.
+### Tier B — build items now DONE locally (toolchains installed 2026-07-25)
+- [x] `./gradlew assembleDebug` produces an installable APK from a fresh clone — **verified**, `app/build/outputs/apk/debug/app-debug.apk` (8.9 MB). Fixing this surfaced three more skeleton gaps: missing `gradle.properties` (no `android.useAndroidX`), a manifest theme referencing the absent View-based Material library, and an unset JVM target (Java 1.8 vs Kotlin 17). All fixed.
+- [x] `pio run -e esp32dev` compiles the firmware — **verified**, `[SUCCESS]`, RAM 6.6%, Flash 21.6%. (Note: PlatformIO is incompatible with the Microsoft Store build of Python; installed python.org Python 3.12 for the firmware toolchain.)
+- [ ] **Bench HIL (the true M1 safety sign-off):** on a real ESP32 with LEDs/scope on the outputs, demonstrate e-stop, comms-loss, bad-CRC, replay, and malformed-frame all force neutral, and that raise/lower never overlap. This is the milestone that authorises moving toward hydraulics. *(Still requires physical hardware.)*
 
 ### How to reproduce Tier A
 ```bash
 python -m pip install -r tools/requirements.txt
 python -m pytest tests/ -v
+```
+
+---
+
+## Phase 2 execution log
+
+**Date:** 2026-07-25
+**Result:** Tier A **PASS** — 13 Kotlin unit tests + 3 Python integration tests green (25 Python tests total across Phases 1–2).
+
+### Work done — tablet transport & link supervision (`android/.../transport/`, `.../logging/`)
+1. **`ControllerProtocol`** extended: added `StatusFrame` and `decodeStatus()` with **CRC verify on receive** — a status frame with a bad/tampered CRC or wrong version is dropped, never read as valid state.
+2. **`Link.kt`**: `Clock` (injectable time), `ByteLink` (the swappable USB-serial / Bluetooth-SPP transport behind an interface), `LineFramer` (reassembles newline frames across arbitrary chunk boundaries), `LinkState` enum.
+3. **`LinkSupervisor`**: connected / stale / faulted state machine off the clock; surfaces controller faults and **never suppresses them** (safety constraint 8).
+4. **`CommandStreamer`**: monotonic sequence numbers, fixed cadence (default 25 Hz) off a **real clock not a UI timer**, CRC-verified status decode, and stops sending on link loss (so the controller times out to neutral).
+5. **`SessionLog`**: immutable, timestamped, exportable TX/RX/event log (acceptance test 7).
+6. **Protocol refinement**: status frames are now CRC-protected too (symmetric with commands). Updated `docs/CONTROL_PROTOCOL.md`, firmware `emitStatus()`, and the Python simulator.
+
+### Bugs caught by the validation loop (both real, both would have shipped)
+- **`CommandStreamer` never sent its first command.** `now - lastSendMs` with `lastSendMs = Long.MIN_VALUE` overflows to a negative number, so the cadence check was never true — the tablet would have sat silent forever. Caught by `streamer_emits_monotonic_sequence_at_cadence` (`expected:<6> but was:<0>`). Fixed with a nullable initial timestamp.
+- (Phase 1 carryover confirmed under real compile: the three Gradle/theme/JVM-target gaps above.)
+
+### Cross-language parity proven
+Kotlin `ControllerProtocol.encode(...)` is asserted **byte-for-byte** equal to the frame produced by `tools/controller_simulator.py` (command CRC 33262, status CRC 30287, and the CRC-16/CCITT vector `"123456789"` → 0x29B1). Tablet, firmware, and simulator therefore agree on the wire format.
+
+### Tier B — still owed on hardware (NOT validated here)
+- [ ] 30-minute stable live session tablet ↔ real ESP32 with no sequence gaps.
+- [ ] Unplug cable / kill app → controller neutral within 250 ms (measured on the bench).
+- [ ] Real USB-serial and/or Bluetooth-SPP `ByteLink` implementations (need the chosen tablet + receiver; transport choice is PROJECT_PLAN §9 item 3).
+
+### How to reproduce
+```bash
+# Python (Phases 1–2 integration)
+python -m pytest tests/ -v
+# Kotlin transport unit tests (needs JDK 17)
+cd android && ./gradlew testDebugUnitTest
 ```
