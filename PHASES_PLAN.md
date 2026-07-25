@@ -148,6 +148,7 @@ A green Tier-A result is progress, never final sign-off for anything behind the 
 
 - **Phase 1:** ✅ **Tier A complete + Tier B compiles verified (2026-07-25)** — 22 Python tests green; Android APK builds; firmware compiles. Only bench HIL (real ESP32) remains. See Phase 1 execution log below.
 - **Phase 2:** ✅ **Tier A complete (2026-07-25)** — tablet transport built and validated: 13 Kotlin unit tests + 3 Python integration tests green. Tier B (30-min live session vs real ESP32) carried to hardware. See Phase 2 execution log below.
+- **Phase 4:** ✅ **Tier A complete (2026-07-25)** — GNSS parsing, geometry, design-surface model, guidance engine, and the real operator UI built and validated: 41 Kotlin tests green (28 new), APK builds. Tier B (live receiver + surveyed-reference + sunlight readability) carried to hardware. See Phase 4 execution log below.
 
 ---
 
@@ -222,4 +223,33 @@ Kotlin `ControllerProtocol.encode(...)` is asserted **byte-for-byte** equal to t
 python -m pytest tests/ -v
 # Kotlin transport unit tests (needs JDK 17)
 cd android && ./gradlew testDebugUnitTest
+```
+
+---
+
+## Phase 4 execution log
+
+**Date:** 2026-07-25
+**Result:** Tier A **PASS** — 41 Kotlin unit tests green (28 new across GNSS/geometry/surface/guidance), APK builds with the real operator UI, 25 Python tests still green.
+
+### Work done
+1. **GNSS** (`gnss/`): `NmeaParser` for GGA/GST/RMC with XOR-checksum verification and fix-quality mapping (0/1/2/4/5 → NONE/AUTONOMOUS/DGPS/FIXED/FLOAT); `NmeaGnssDecoder` fuses GST accuracy + RMC speed/heading into each GGA position; `GnssSource` interface with a `DemoGnssSource` so the UI runs with no hardware.
+2. **Geometry** (`geom/`): `CoordinateTransform` (WGS84 → local tangent-plane East/North using the length-of-a-degree series, sub-cm over a field, with geodetic round-trip); `MachineGeometry` derives the tool control point from antenna position + lever arm + attitude (pitch/roll vertical model, heading horizontal model).
+3. **Design surface** (`surface/`): `DesignSurfaceModel` interface + `PlaneDesignSurface` (grade plane by coefficients or fitted through three points, optional rectangular bounds). This **decouples Phase 4 from the still-blocked Phase 3** — the real `.gps` parser will just emit a `DesignSurfaceModel`.
+4. **Guidance** (`control/GuidanceEngine`): cut/fill with a fixed, documented sign convention (`design − tool`; **positive = RAISE/fill, negative = LOWER/cut**), deadband, nudge, rebench offset, and the AUTO interlocks (requires RTK FIXED, fresh correction, accuracy under limit, inside boundary; emits a human reason when inhibited).
+5. **Operator UI** (`MainActivity`): the placeholder is replaced by the real screen [DSN §6] — cut/fill map at 78 % of width, large signed value with visible units, AUTO / nudge / rebench, and a status panel where **colour is always paired with text + icon**. Driven live by `DemoGnssSource`; AUTO auto-drops if an interlock fails.
+
+### Gate items pinned by tests
+- **Cut/fill sign & unit confirmed:** `tool_below_design_reads_positive_and_says_raise` (tool 1542.386, design 1542.420 → **+34 mm, RAISE**) and the LOWER/ON-GRADE counterparts.
+- **AUTO refused on invalid/stale GNSS:** refused for FLOAT, stale (age > 1 s), poor accuracy (> 0.05 m), and outside-boundary — each asserting the specific inhibit reason.
+
+### Tier B — still owed on hardware (NOT validated here)
+- [ ] Cut/fill confirmed against a real **surveyed reference** point in the field.
+- [ ] Live receiver: implement a real NMEA `GnssSource` over Bluetooth/USB for the chosen Emlid (feeds the existing `NmeaGnssDecoder`).
+- [ ] Map **readable in direct sunlight** at arm's length from the operator seat (physical check on the actual tablet).
+- [ ] Antenna→tool lever arm + attitude source (single antenna ⇒ add a pitch/roll sensor before AUTO is trusted).
+
+### How to reproduce
+```bash
+cd android && ./gradlew testDebugUnitTest assembleDebug   # 41 tests + APK (needs JDK 17)
 ```
