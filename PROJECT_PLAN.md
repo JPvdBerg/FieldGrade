@@ -142,7 +142,7 @@ if (version != 1) return false;
 - Monotonic `seq`; a `seq` ≤ last accepted ⇒ reject as stale (guard against replay/reorder) + fault `3`.
 - Emit the status frame every loop (or ≥20 Hz): `{"v":1,"seq_ack":...,"state":...,"output":...,"supply_mv":...,"estop":...,"fault":...,"age_ms":...}`.
 
-**(d) E-stop must be a hard immediate zero, not a ramp.** Today `neutral()` only zeroes the *request*; the output then ramps down through the slew limiter (`MAX_SLEW_PER_LOOP = 18` per 10 ms ≈ 460 ms from full). Timeout ramp-down is arguably fine; **e-stop must bypass the slew limiter and write 0 immediately**, and the system must still meet "neutral within 250 ms of comms loss." [DSN §11]
+**(d) E-stop AND command-timeout must be a hard immediate zero, not a ramp.** Today `neutral()` only zeroes the *request*; the output then ramps down through the slew limiter (`MAX_SLEW_PER_LOOP = 18` per 10 ms ≈ 460 ms from full). **Resolved during Phase 1:** a ramp-down cannot meet the acceptance test "neutral within 250 ms of communication loss" from full duty, so **both e-stop and command-timeout hard-zero the output immediately** (bypassing the slew limiter). Comms loss is a fault of the same safety class as e-stop — the supervising link is gone, so motion must stop, not coast. The slew limiter applies only to normal in-control transitions. A single bad frame amid a healthy stream ramps down (the next good frame re-enables within ~20 ms; persistent bad frames hit the 250 ms timeout and hard-zero). [DSN §11]
 ```cpp
 void hardNeutral() {          // e-stop / brownout path
   requestedOutput = 0;

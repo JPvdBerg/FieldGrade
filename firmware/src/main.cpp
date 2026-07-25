@@ -2,40 +2,136 @@
 #include <ArduinoJson.h>
 #include "config.h"
 
-static uint32_t lastValidCommandMs = 0;
-static int requestedOutput = 0;
-static int appliedOutput = 0;
-static bool enabled = false;
+// FieldGrade ESP32 controller firmware.
+//
+// Safety spine (see PROJECT_PLAN.md section 4 and docs/CONTROL_PROTOCOL.md):
+//   - neutral by default; any doubt -> neutral
+//   - CRC-16/CCITT verified on every frame; monotonic sequence (anti-replay)
+//   - 250 ms command timeout -> neutral (fault 1)
+//   - hardware e-stop -> immediate hard zero (fault 2), bypasses the slew limiter
+//   - raise/lower are structurally mutually exclusive; dead-time on direction reversal
+//   - controller-side gain, MAX_DUTY clamp and slew limit
+//   - status frame emitted every loop so the tablet is never blind
+//
+// NOTE: ledcSetup/ledcAttachPin below target ESP32 Arduino core 2.x (matches the
+// pinned toolchain). On core 3.x replace with ledcAttach(pin, freq, resBits).
 
-void neutral() {
-  requestedOutput = 0;
-  enabled = false;
+static uint32_t lastValidCommandMs = 0;
+static long     lastSeq            = -1;     // last accepted sequence number
+static int      requestedDuty      = 0;      // signed duty derived from last valid command
+static int      appliedOutput      = 0;      // signed duty currently applied
+static bool     enabled            = false;
+static uint32_t deadtimeUntilMs    = 0;      // no opposite-direction output before this time
+static int      faultCode          = FAULT_NONE;
+
+// ---- CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), matches the tablet encoder ----
+static uint16_t crc16Ccitt(const uint8_t* data, size_t len) {
+  uint16_t crc = 0xFFFF;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= (uint16_t)data[i] << 8;
+    for (int b = 0; b < 8; b++) {
+      crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+  }
+  return crc;
 }
 
-void applyOutput(int signedDuty) {
-  signedDuty = constrain(signedDuty, -MAX_DUTY, MAX_DUTY);
-  if (digitalRead(PIN_ESTOP) == LOW || !enabled) signedDuty = 0;
+// Rebuild the canonical payload with crc16=0 in the exact field order the tablet
+// uses, then CRC it. Must byte-match the tablet's kotlinx.serialization output.
+static uint16_t expectedCrc(long v, long seq, long ts_ms, const char* mode,
+                            long target_mm, long manual, bool enable) {
+  char buf[192];
+  int n = snprintf(buf, sizeof(buf),
+    "{\"v\":%ld,\"seq\":%ld,\"ts_ms\":%ld,\"mode\":\"%s\",\"target_mm\":%ld,"
+    "\"manual\":%ld,\"enable\":%s,\"crc16\":0}",
+    v, seq, ts_ms, mode, target_mm, manual, enable ? "true" : "false");
+  if (n <= 0) return 0;
+  return crc16Ccitt((const uint8_t*)buf, (size_t)n);
+}
 
-  int delta = signedDuty - appliedOutput;
-  delta = constrain(delta, -MAX_SLEW_PER_LOOP, MAX_SLEW_PER_LOOP);
+static void hardNeutral(int fault) {   // e-stop / brownout / boot: immediate, bypass slew
+  requestedDuty   = 0;
+  appliedOutput   = 0;
+  enabled         = false;
+  faultCode       = fault;
+  ledcWrite(0, 0);
+  ledcWrite(1, 0);
+}
+
+static void requestNeutral(int fault) { // comms/frame fault: stop requesting, let slew ramp down
+  requestedDuty = 0;
+  enabled       = false;
+  faultCode     = fault;
+}
+
+static int targetDutyFor(const char* mode, long target_mm, long manual) {
+  if (strcmp(mode, "MANUAL") == 0) return constrain((int)manual, -MAX_DUTY, MAX_DUTY);
+  if (strcmp(mode, "AUTO")   == 0) return constrain((int)(target_mm * GAIN_PER_MM), -MAX_DUTY, MAX_DUTY);
+  return 0; // HOLD
+}
+
+static int sgn(int x) { return (x > 0) - (x < 0); }
+
+// Drive the output toward `target` under all limits. Called every loop.
+static void applyOutput(int target) {
+  if (digitalRead(PIN_ESTOP) == LOW || !enabled) target = 0;
+
+  // Direction dead-time / mutual exclusion: never jump across zero directly.
+  if (target != 0 && appliedOutput != 0 && sgn(target) != sgn(appliedOutput)) target = 0;
+  if (appliedOutput == 0 && target != 0 && millis() < deadtimeUntilMs)       target = 0;
+
+  target = constrain(target, -MAX_DUTY, MAX_DUTY);
+  int delta = constrain(target - appliedOutput, -MAX_SLEW_PER_LOOP, MAX_SLEW_PER_LOOP);
+  int prev = appliedOutput;
   appliedOutput += delta;
 
-  ledcWrite(0, appliedOutput > 0 ? appliedOutput : 0);
+  if (prev != 0 && appliedOutput == 0) deadtimeUntilMs = millis() + DIRECTION_DEADTIME_MS;
+
+  // Structurally mutually exclusive: one channel is always zero.
+  ledcWrite(0, appliedOutput > 0 ?  appliedOutput : 0);
   ledcWrite(1, appliedOutput < 0 ? -appliedOutput : 0);
 }
 
-bool parseCommand(const String& line) {
+static bool parseCommand(const String& line) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return false;
-  if (doc["v"] | 0 != 1) return false;
-  enabled = doc["enable"] | false;
-  const char* mode = doc["mode"] | "HOLD";
-  int target = doc["target_mm"] | 0;
-  int manual = doc["manual"] | 0;
-  requestedOutput = strcmp(mode, "MANUAL") == 0 ? manual : target * 12;
-  requestedOutput = constrain(requestedOutput, -1000, 1000);
+
+  int version = doc["v"] | 0;
+  if (version != PROTO_VERSION) return false;
+  if (!doc["crc16"].is<long>()) return false;
+
+  long seq       = doc["seq"]       | -1;
+  long ts_ms     = doc["ts_ms"]     | 0;
+  const char* mode = doc["mode"]    | "HOLD";
+  long target_mm = doc["target_mm"] | 0;
+  long manual    = doc["manual"]    | 0;
+  bool en        = doc["enable"]    | false;
+  long crc       = doc["crc16"]     | 0;
+
+  if ((uint16_t)crc != expectedCrc(version, seq, ts_ms, mode, target_mm, manual, en)) return false;
+  if (seq <= lastSeq) return false;    // stale / replayed
+
+  lastSeq            = seq;
+  enabled            = en;
+  requestedDuty      = targetDutyFor(mode, target_mm, manual);
   lastValidCommandMs = millis();
+  faultCode          = FAULT_NONE;
   return true;
+}
+
+static void emitStatus() {
+  const char* state = (digitalRead(PIN_ESTOP) == LOW) ? "ESTOP"
+                    : (appliedOutput != 0)            ? "ACTIVE" : "NEUTRAL";
+  JsonDocument doc;
+  doc["v"]       = PROTO_VERSION;
+  doc["seq_ack"] = lastSeq;
+  doc["state"]   = state;
+  doc["output"]  = appliedOutput;
+  doc["estop"]   = (digitalRead(PIN_ESTOP) == LOW);
+  doc["fault"]   = faultCode;
+  doc["age_ms"]  = (long)(millis() - lastValidCommandMs);
+  serializeJson(doc, Serial);
+  Serial.print('\n');
 }
 
 void setup() {
@@ -45,17 +141,24 @@ void setup() {
   ledcSetup(1, PWM_FREQUENCY_HZ, PWM_RESOLUTION_BITS);
   ledcAttachPin(PIN_PWM_RAISE, 0);
   ledcAttachPin(PIN_PWM_LOWER, 1);
-  neutral();
+  hardNeutral(FAULT_NONE);   // boot -> neutral, disabled until deliberate re-enable
 }
 
 void loop() {
   if (Serial.available()) {
-    String line = Serial.readStringUntil('
-');
-    if (!parseCommand(line)) neutral();
+    String line = Serial.readStringUntil('\n');
+    if (line.length() > 0 && !parseCommand(line)) requestNeutral(FAULT_BADFRAME);
   }
-  if (millis() - lastValidCommandMs > COMMAND_TIMEOUT_MS) neutral();
-  if (digitalRead(PIN_ESTOP) == LOW) neutral();
-  applyOutput(enabled ? requestedOutput : 0);
-  delay(10);
+
+  if (digitalRead(PIN_ESTOP) == LOW) {
+    hardNeutral(FAULT_ESTOP);                 // immediate, bypasses slew
+  } else if (millis() - lastValidCommandMs >= COMMAND_TIMEOUT_MS) {
+    // Comms loss is a fault of the same class as e-stop: stop, do not coast down.
+    // Hard-zero is what meets "neutral within 250 ms of communication loss".
+    hardNeutral(FAULT_TIMEOUT);
+  }
+
+  applyOutput(enabled ? requestedDuty : 0);
+  emitStatus();
+  delay(LOOP_MS);
 }

@@ -1,0 +1,4 @@
+# Python tooling + test dependencies for FieldGrade
+# Install: python -m pip install -r tools/requirements.txt
+# Run tests: python -m pytest tests/ -v
+pytest>=8.0

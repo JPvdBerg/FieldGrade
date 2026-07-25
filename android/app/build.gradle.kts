@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -16,7 +18,8 @@ android {
     }
 
     buildFeatures { compose = true }
-    composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
+    // Kotlin 2.0: Compose compiler version is governed by the kotlin.plugin.compose
+    // plugin, so the old composeOptions{kotlinCompilerExtensionVersion} block is gone.
 }
 
 dependencies {

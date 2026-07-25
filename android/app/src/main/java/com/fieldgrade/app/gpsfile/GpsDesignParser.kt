@@ -12,8 +12,15 @@ interface GpsDesignParser {
 
 class UnsupportedGpsDesignParser : GpsDesignParser {
     override fun parse(input: InputStream): DesignSurface {
-        val header = input.readNBytes(32)
-        val signature = header.joinToString("") { "%02x".format(it) }
-        throw IllegalArgumentException("Unsupported .gps design format; first 32 bytes: $signature")
+        // Read up to 32 header bytes without InputStream.readNBytes (API 33+); minSdk is 26.
+        val header = ByteArray(32)
+        var read = 0
+        while (read < header.size) {
+            val n = input.read(header, read, header.size - read)
+            if (n < 0) break
+            read += n
+        }
+        val signature = header.copyOf(read).joinToString("") { "%02x".format(it) }
+        throw IllegalArgumentException("Unsupported .gps design format; first $read bytes: $signature")
     }
 }
