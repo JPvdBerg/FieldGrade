@@ -18,6 +18,21 @@ data class Attitude(val pitchDeg: Double = 0.0, val rollDeg: Double = 0.0, val h
 data class ToolPoint(val eastM: Double, val northM: Double, val elevationM: Double)
 
 /**
+ * Where the machine is, which way it is going, and how fast, in the local site grid.
+ *
+ * Heading is degrees clockwise from north; NaN when it is not yet known. Speed
+ * travels with it because the two are inseparable in practice: heading here comes
+ * from course over ground, whose trustworthiness is entirely a function of speed.
+ * Anything deciding whether to believe the heading needs both.
+ */
+data class MachinePose(
+    val eastM: Double,
+    val northM: Double,
+    val headingDeg: Double = Double.NaN,
+    val speedMps: Double = Double.NaN
+)
+
+/**
  * Turns an antenna solution + attitude into the tool control point.
  *
  * With a single antenna the tool elevation is derived, not measured, so attitude
