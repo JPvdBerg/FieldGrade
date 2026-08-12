@@ -3,6 +3,9 @@
 GNSS-guided land-levelling / ditch-grading system: an Android tablet (supervisory)
 driving a dedicated ESP32 hydraulic controller (real-time, fail-safe neutral).
 
+> **New here? Read [HANDOVER.md](HANDOVER.md) first** — setup, what is real
+> versus generated, the safety spine, and the known gaps.
+
 The whole chain runs offline today, on real surveyed design surfaces, with no
 hardware attached — see **[Run it](#run-it)**.
 
@@ -60,7 +63,7 @@ cd desktop && ./gradlew run
 cd android && ./gradlew testDebugUnitTest --tests "*GradingSimulationTest"
 
 # Everything.
-cd android && ./gradlew testDebugUnitTest     # 137 Kotlin tests
+cd android && ./gradlew testDebugUnitTest     # 240 Kotlin tests
 cd android && ./gradlew assembleDebug         # app/build/outputs/apk/debug/
 python -m pytest tests/ -v                    # 25 protocol/safety tests
 cd firmware && pio run -e esp32dev            # needs PlatformIO
