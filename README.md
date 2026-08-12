@@ -1,56 +1,103 @@
 # FieldGrade Machine-Control Prototype
 
-GNSS-guided land-levelling / ditch-grading system: an Android tablet (supervisory) driving a dedicated ESP32 hydraulic controller (real-time, fail-safe neutral).
+GNSS-guided land-levelling / ditch-grading system: an Android tablet (supervisory)
+driving a dedicated ESP32 hydraulic controller (real-time, fail-safe neutral).
 
-> **Start here:** read [PROJECT_PLAN.md](PROJECT_PLAN.md) — the full build plan, the exact code-level fixes needed for a green build, the work packages, and the safety fence. This README covers the code package itself.
+The whole chain runs offline today, on real surveyed design surfaces, with no
+hardware attached — see **[Run it](#run-it)**.
 
-This package contains the initial design documentation and a compilable-oriented code skeleton for an Android tablet connected to a dedicated ESP32 hydraulic controller.
+## The pipeline
 
-## Important input-file note
+```
+1. SURVEY    drive the field with RTK   -> XYZ points        SurveyRecorder
+2. DESIGN    OptiSurface / AgForm3D     -> XYZ or LandXML    (third-party, not us)
+3. LOAD      import the design          -> DesignSurfaceModel XyzPointReader,
+                                                              LandXmlSurfaceReader,
+                                                              DelaunayTriangulator,
+                                                              TinDesignSurface
+4. POSITION  RTK receiver               -> GnssSample         NmeaGnssDecoder
+             local grid + lever arm     -> tool point         CoordinateTransform,
+                                                              MachineGeometry
+5. COMPARE   design - tool              -> cut/fill mm        GuidanceEngine
+6. ACTUATE   mm -> frame -> ESP32 -> PWM -> valve -> cylinder ControlEngine,
+                                                              CommandStreamer
+```
 
-The uploaded item named `sp6b.gps 2` is an Apple File Provider metadata object, not the underlying design file. Its metadata reports an original document size of about 1,034,240 bytes, while the uploaded object is only 3,212 bytes. The `.gps` parser in this package therefore uses an adapter interface and a diagnostic inspector until the actual `sp6b.gps` bytes are re-uploaded.
+Step 2 is bought in. Everything else is here.
+
+## Design file formats
+
+`.gps` is the **proprietary Trimble AgGPS FieldLevel** format — it is what design
+tools mean by "export machine control file as AgGPS Field Level (\*.gps)".
+PROJECT_PLAN section 12 rules out reimplementing a vendor's proprietary format, so
+`GpsDesignParser` deliberately refuses rather than guesses.
+
+It is not on the critical path. The same designs are exchanged as **XYZ text**
+(`Point,Easting,Northing,Elevation,Code`) and **LandXML**, both open, both
+implemented. Ask the design house for either export of the same field.
 
 ## Package contents
 
-- `docs/FieldGrade_System_Design.docx` — complete system-design document.
-- `docs/CONTROL_PROTOCOL.md` — tablet-to-controller command protocol.
-- `android/` — Kotlin Android application skeleton.
-- `firmware/` — ESP32 PlatformIO firmware skeleton.
-- `tools/gps_inspector.py` — identifies a real design file and produces a safe hex/structure report.
-- `tools/controller_simulator.py` — desktop simulator for protocol testing.
-- `tests/test_protocol.py` — protocol framing tests.
+- `docs/` — system design document and the tablet-to-controller protocol.
+- `android/` — the Kotlin application. Pure-logic packages (`design`, `geom`,
+  `gnss`, `control`, `surface`, `transport`, `sim`, `survey`, `ui`) carry no
+  Android dependencies, which is why the desktop harness can render the real
+  operator screen unchanged.
+- `desktop/` — dev harness: opens the real operator UI in a JVM window.
+- `firmware/` — ESP32 PlatformIO firmware.
+- `tools/` — data tooling and the reference controller model.
+- `tools/sampledata/` — real design surfaces and NMEA logs, with provenance.
 
-## Building & testing
+## Run it
 
-Progress is tracked in [PHASES_PLAN.md](PHASES_PLAN.md) (7 phases to production). Phases 1–2 are complete and verified locally.
-
-**Prerequisites:** JDK 17 (Android/Gradle does not support JDK 25), a real python.org Python (the Microsoft Store Python breaks PlatformIO), and the Android SDK (build-tools 35, platform 35).
+**Prerequisites:** JDK 17, Python 3.11+, Android SDK (build-tools 36, platform 35).
 
 ```bash
-# Android app  (produces app/build/outputs/apk/debug/app-debug.apk)
-cd android && ./gradlew assembleDebug
+# The operator screen on a real surveyed surface + replayed RTK track.
+cd desktop && ./gradlew run
 
-# Android transport unit tests  (13 tests)
-cd android && ./gradlew testDebugUnitTest
+# The closed loop, headless, with a printed trace.
+cd android && ./gradlew testDebugUnitTest --tests "*GradingSimulationTest"
 
-# ESP32 firmware  (produces .pio/build/esp32dev/firmware.bin)
-cd firmware && pio run -e esp32dev
-
-# Protocol + safety + transport tests  (25 tests)
-python -m pip install -r tools/requirements.txt
-python -m pytest tests/ -v
+# Everything.
+cd android && ./gradlew testDebugUnitTest     # 137 Kotlin tests
+cd android && ./gradlew assembleDebug         # app/build/outputs/apk/debug/
+python -m pytest tests/ -v                    # 25 protocol/safety tests
+cd firmware && pio run -e esp32dev            # needs PlatformIO
 ```
+
+## What the simulation shows
+
+A 13.5-minute serpentine pass over a real 4.4 ha surveyed field, closed through a
+simulated ESP32 and a modelled blade:
+
+```
+                     AUTO off     AUTO on
+mean |cut/fill|        136.3 mm     28.9 mm
+within +/-25 mm         14.0%       84.1%
+faults                     none
+```
+
+This proves the **modules agree with each other** about units, signs and timing.
+It proves nothing about real hydraulics, real timing jitter, or the real ESP32 —
+those remain Tier B, behind the bench-HIL gate in PHASES_PLAN.
 
 ## Safety position
 
-The tablet does not directly drive hydraulics. The ESP32 controller owns the watchdog, command timeout, output limits, neutral state, and emergency-stop input. Field use still requires proper hydraulic engineering, machine-specific commissioning, and independent safety review.
+The tablet does not directly drive hydraulics. The ESP32 controller owns the
+watchdog, command timeout, output limits, neutral state, and emergency-stop input.
+That state machine now exists three times — firmware, the Python reference model,
+and `SimulatedController` — so a disagreement fails a test instead of moving a
+machine.
 
-## Next action
+Field use still requires proper hydraulic engineering, machine-specific
+commissioning, and independent safety review.
 
-Re-upload the actual `sp6b.gps` file from local storage rather than an iCloud placeholder. Once available, run:
+## Known gaps
 
-```bash
-python tools/gps_inspector.py /path/to/sp6b.gps
-```
-
-Then implement the matching parser behind `GpsDesignParser`.
+- **Attitude is not measured.** With a single antenna on a 3.10 m mast, 1 degree of
+  pitch moves the derived blade elevation ~54 mm — twice the working tolerance.
+  A pitch/roll sensor is needed before AUTO is trusted on uneven ground.
+- **The RTK track is synthetic.** No public RTK-fixed agricultural NMEA log was
+  found. Replace it with a real Emlid recording.
+- `MAX_DUTY`, slew rate and dead time remain commissioning placeholders.
