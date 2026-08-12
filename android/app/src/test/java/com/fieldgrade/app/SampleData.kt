@@ -40,5 +40,5 @@ object SampleData {
     fun consumerNmea(): File = nmea("amod_agl3080_consumer.txt")
 
     /** SYNTHETIC RTK track over the nunosurf field. */
-    fun rtkTrack(): File = nmea("site_track_rtk.nmea")
+    fun rtkTrack(): File = nmea("site_track_rtk_SYNTHETIC.nmea")
 }

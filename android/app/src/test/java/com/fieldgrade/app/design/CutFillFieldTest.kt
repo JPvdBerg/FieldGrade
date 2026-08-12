@@ -129,7 +129,7 @@ class CutFillFieldTest {
             DesignSurface("design", XyzPointReader.read(SampleData.nunosurfXyz().readText()).points)
         )
         val existingPoints = XyzPointReader.read(
-            SampleData.design("nunosurf_existing.xyz").readText()
+            SampleData.design("nunosurf_existing_SYNTHETIC.xyz").readText()
         ).points
         val existing: DesignSurfaceModel =
             TinDesignSurface.from(DesignSurface("existing", existingPoints))

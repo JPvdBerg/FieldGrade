@@ -15,6 +15,7 @@ import com.fieldgrade.app.control.GuidanceDirection
 import com.fieldgrade.app.control.GuidanceState
 import com.fieldgrade.app.geom.MachinePose
 import com.fieldgrade.app.gnss.FixQuality
+import com.fieldgrade.app.provenance.SessionProvenance
 import com.fieldgrade.app.ui.map.FieldMapView
 import com.fieldgrade.app.ui.map.FieldTrack
 import com.fieldgrade.app.ui.map.HeadingFilter
@@ -76,7 +77,9 @@ fun FieldGradeScreen(feed: OperatorFeed = remember { DemoOperatorFeed() }) {
         }
     }
 
-    Row(Modifier.fillMaxSize().padding(12.dp)) {
+    Column(Modifier.fillMaxSize()) {
+        ProvenanceBanner(feed.provenance)
+        Row(Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
         Column(Modifier.weight(0.78f).fillMaxHeight()) {
             Card(Modifier.fillMaxWidth().weight(if (showProfile) 0.68f else 1f)) {
                 FieldMapView(
@@ -126,7 +129,39 @@ fun FieldGradeScreen(feed: OperatorFeed = remember { DemoOperatorFeed() }) {
                 modifier = Modifier.fillMaxWidth()
             ) { Text(if (showProfile) "PROFILE ON" else "PROFILE OFF") }
             Text("Nudge: $nudgeMm mm", style = MaterialTheme.typography.bodyMedium)
-            StatusPanel(state, auto, feed.label)
+            StatusPanel(state, auto, feed.label, feed.provenance)
+            }
+        }
+    }
+}
+
+/**
+ * A standing warning whenever any input is generated.
+ *
+ * Deliberately at the top, full width, and impossible to mistake for chrome. The
+ * dangerous failure here is not a crash — it is somebody watching this track a
+ * design to 28 mm and believing it says something about hardware. It does not.
+ */
+@Composable
+private fun ProvenanceBanner(provenance: SessionProvenance) {
+    val banner = provenance.banner() ?: return
+    Surface(
+        color = Color(0xFF7A3E00),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Icon plus text: the warning must survive a monochrome screen.
+            Text("⚠", color = Color(0xFFFFD08A), fontWeight = FontWeight.Bold)
+            Text(
+                banner,
+                color = Color(0xFFFFE7C7),
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
@@ -162,7 +197,9 @@ private fun AutoButton(auto: Boolean, canAuto: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun StatusPanel(state: GuidanceState, auto: Boolean, sourceLabel: String) {
+private fun StatusPanel(
+    state: GuidanceState, auto: Boolean, sourceLabel: String, provenance: SessionProvenance
+) {
     Card(shape = RoundedCornerShape(8.dp)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // colour is never the only indicator: always paired with text + icon.
@@ -188,6 +225,15 @@ private fun StatusPanel(state: GuidanceState, auto: Boolean, sourceLabel: String
                 sourceLabel, style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // Per-input verdict, so it is clear which half is invented.
+            for (src in provenance.sources) {
+                Text(
+                    "${src.provenance.label}  ${src.role}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (src.provenance == com.fieldgrade.app.provenance.Provenance.REAL)
+                        Color(0xFF7FB77F) else Color(0xFFEF9A3D)
+                )
+            }
         }
     }
 }

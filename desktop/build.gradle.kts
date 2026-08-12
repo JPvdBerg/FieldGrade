@@ -30,6 +30,7 @@ kotlin {
         srcDir("$sharedRoot/geom")
         srcDir("$sharedRoot/gnss")
         srcDir("$sharedRoot/logging")
+        srcDir("$sharedRoot/provenance")
         srcDir("$sharedRoot/sim")
         srcDir("$sharedRoot/surface")
         srcDir("$sharedRoot/survey")

@@ -4,6 +4,7 @@ import com.fieldgrade.app.control.GuidanceState
 import com.fieldgrade.app.design.CutFillField
 import com.fieldgrade.app.geom.LocalXY
 import com.fieldgrade.app.geom.MachinePose
+import com.fieldgrade.app.provenance.SessionProvenance
 import com.fieldgrade.app.surface.DesignSurfaceModel
 import com.fieldgrade.app.ui.OperatorFeed
 
@@ -22,6 +23,7 @@ import com.fieldgrade.app.ui.OperatorFeed
 class SimulationOperatorFeed(
     private val sim: GradingSimulation,
     override val label: String,
+    override val provenance: SessionProvenance,
     override val fieldOutline: List<LocalXY> = emptyList(),
     override val cutFillField: CutFillField? = null,
     override val designSurface: DesignSurfaceModel? = null,

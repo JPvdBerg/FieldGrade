@@ -17,6 +17,7 @@ import com.fieldgrade.app.design.XyzPointReader
 import com.fieldgrade.app.geom.CoordinateTransform
 import com.fieldgrade.app.geom.LocalXY
 import com.fieldgrade.app.gnss.NmeaReplaySource
+import com.fieldgrade.app.provenance.SessionProvenance
 import com.fieldgrade.app.sim.GradingSimulation
 import com.fieldgrade.app.sim.SimulationOperatorFeed
 import com.fieldgrade.app.ui.DemoOperatorFeed
@@ -60,8 +61,8 @@ private fun buildFeed(args: Array<String>): OperatorFeed {
 
     val paths = args.filterNot { it.startsWith("--") }
     val designFile = paths.getOrNull(0)?.let(::File) ?: findSample("design/nunosurf_design.xyz")
-    val trackFile = paths.getOrNull(1)?.let(::File) ?: findSample("nmea/site_track_rtk.nmea")
-    val existingFile = paths.getOrNull(2)?.let(::File) ?: findSample("design/nunosurf_existing.xyz")
+    val trackFile = paths.getOrNull(1)?.let(::File) ?: findSample("nmea/site_track_rtk_SYNTHETIC.nmea")
+    val existingFile = paths.getOrNull(2)?.let(::File) ?: findSample("design/nunosurf_existing_SYNTHETIC.xyz")
 
     if (designFile == null || trackFile == null || !designFile.isFile || !trackFile.isFile) {
         println("sample data not found — falling back to the synthetic demo.")
@@ -69,7 +70,7 @@ private fun buildFeed(args: Array<String>): OperatorFeed {
         println("    python tools/landxml_to_xyz.py tools/sampledata/design/nunosurf.xml \\")
         println("           tools/sampledata/design/nunosurf_design.xyz --local")
         println("    python tools/make_rtk_track.py tools/sampledata/design/nunosurf_design.xyz \\")
-        println("           tools/sampledata/nmea/site_track_rtk.nmea --swath 20")
+        println("           tools/sampledata/nmea/site_track_rtk_SYNTHETIC.nmea --swath 20")
         return DemoOperatorFeed(SITE_LAT, SITE_LON)
     }
 
@@ -121,6 +122,23 @@ private fun buildFeed(args: Array<String>): OperatorFeed {
         println("track   : ${trackFile.name}")
         println("loaded in $loaded ms")
 
+        // Declared explicitly rather than inferred: the loader knows exactly what
+        // each file is, and guessing is what lets a generated file pass as real.
+        val provenance = SessionProvenance(
+            listOfNotNull(
+                SessionProvenance.real(
+                    "design", designFile.name, "surveyed LandXML from landxml.org"
+                ),
+                existingFile?.takeIf { it.isFile }?.let {
+                    SessionProvenance.fromName("ground", it.name, "generated existing surface")
+                },
+                SessionProvenance.fromName(
+                    "GNSS", trackFile.name, "generated RTK track; no real Emlid log exists yet"
+                )
+            )
+        )
+        print(provenance.describe())
+
         val sim = GradingSimulation(
             surface = tin,
             gnss = NmeaReplaySource(trackFile.readLines()),
@@ -129,6 +147,7 @@ private fun buildFeed(args: Array<String>): OperatorFeed {
         SimulationOperatorFeed(
             sim,
             label = "REPLAY — ${designFile.name} + ${trackFile.name}",
+            provenance = provenance,
             fieldOutline = outline,
             cutFillField = cutFill,
             designSurface = tin,

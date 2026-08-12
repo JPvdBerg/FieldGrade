@@ -10,6 +10,7 @@ import com.fieldgrade.app.geom.LeverArm
 import com.fieldgrade.app.geom.LocalXY
 import com.fieldgrade.app.geom.MachinePose
 import com.fieldgrade.app.gnss.DemoGnssSource
+import com.fieldgrade.app.provenance.SessionProvenance
 import com.fieldgrade.app.surface.DesignSurfaceModel
 import com.fieldgrade.app.surface.PlaneDesignSurface
 
@@ -24,6 +25,13 @@ import com.fieldgrade.app.surface.PlaneDesignSurface
 interface OperatorFeed {
     /** Short description of the data source, shown in the status panel. */
     val label: String
+
+    /**
+     * What this feed is running on, and whether any of it is invented. The screen
+     * shows a standing warning whenever it is not all real — a demo that looks
+     * like a live machine is the failure mode this guards against.
+     */
+    val provenance: SessionProvenance
 
     /** How often the UI should call [tick]. */
     val periodMs: Long get() = 200
@@ -76,6 +84,10 @@ class DemoOperatorFeed(
 ) : OperatorFeed {
 
     override val label = "DEMO — synthetic track on a grade plane"
+
+    override val provenance = SessionProvenance.allSynthetic(
+        "no sample data loaded; generated track on a generated plane"
+    )
 
     private val transform = CoordinateTransform(originLat, originLon)
 
