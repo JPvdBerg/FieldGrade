@@ -1,61 +1,106 @@
 package com.fieldgrade.app.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fieldgrade.app.control.GuidanceDirection
-import com.fieldgrade.app.control.GuidanceEngine
 import com.fieldgrade.app.control.GuidanceState
-import com.fieldgrade.app.geom.Attitude
-import com.fieldgrade.app.geom.CoordinateTransform
-import com.fieldgrade.app.geom.LeverArm
-import com.fieldgrade.app.gnss.DemoGnssSource
+import com.fieldgrade.app.geom.MachinePose
 import com.fieldgrade.app.gnss.FixQuality
-import com.fieldgrade.app.surface.PlaneDesignSurface
+import com.fieldgrade.app.ui.map.FieldMapView
+import com.fieldgrade.app.ui.map.FieldTrack
+import com.fieldgrade.app.ui.map.HeadingFilter
+import com.fieldgrade.app.ui.map.MapOrientation
+import com.fieldgrade.app.ui.map.ProfileSampler
+import com.fieldgrade.app.ui.map.ProfileView
 import kotlinx.coroutines.delay
-import kotlin.math.abs
 
 // The operator screen. Pure Jetpack Compose — no Android-framework calls — so it is
 // rendered unchanged both by the Android app (MainActivity) and by the desktop dev
 // harness (desktop/). Keep it that way: anything Android-specific belongs in MainActivity.
 @Composable
-fun FieldGradeScreen() {
-    // --- demo wiring: a real receiver + parsed .gps surface are injected later ---
-    val originLat = -26.20000; val originLon = 28.04000
-    val transform = remember { CoordinateTransform(originLat, originLon) }
-    val surface = remember { PlaneDesignSurface(a = 1542.400, b = 0.0, c = -0.005) }
-    val arm = remember { LeverArm(forwardM = 0.0, rightM = 0.0, downM = 3.10) }
-    val engine = remember { GuidanceEngine() }
-    val demo = remember { DemoGnssSource(originLat, originLon) }
-
+fun FieldGradeScreen(feed: OperatorFeed = remember { DemoOperatorFeed() }) {
     var auto by remember { mutableStateOf(false) }
-    var nudgeMm by remember { mutableIntStateOf(0) }
-    var benchOffsetM by remember { mutableDoubleStateOf(0.0) }
     var state by remember { mutableStateOf(GuidanceState.NONE) }
+    var nudgeMm by remember { mutableIntStateOf(0) }
+    var pose by remember { mutableStateOf<MachinePose?>(null) }
+    // The track is mutable history; swapping the snapshot list is what triggers
+    // recomposition, since mutating the recorder in place would not.
+    val recorder = remember(feed) { FieldTrack() }
+    var trackMarks by remember { mutableStateOf<List<FieldTrack.Mark>>(emptyList()) }
 
-    LaunchedEffect(Unit) {
+    // Course over ground is unusable raw; the filter owns that problem entirely.
+    val heading = remember(feed) { HeadingFilter() }
+    var orientation by remember { mutableStateOf(MapOrientation.NORTH_UP) }
+    var headingDeg by remember { mutableDoubleStateOf(Double.NaN) }
+    var headingHolding by remember { mutableStateOf(true) }
+    var showProfile by remember { mutableStateOf(false) }
+    var profile by remember { mutableStateOf(ProfileSampler.Profile(emptyList(), Double.NaN, 40.0, 10.0)) }
+
+    LaunchedEffect(feed) {
         while (true) {
-            val sample = demo.tick()
-            state = engine.compute(sample, transform, arm, Attitude(), surface, benchOffsetM, nudgeMm)
+            state = feed.tick()
+            nudgeMm = feed.nudgeMm
+            pose = feed.pose
+            pose?.let { heading.update(it.headingDeg, it.speedMps) }
+            headingDeg = heading.headingDeg
+            headingHolding = heading.isHolding
+            pose?.let {
+                if (state.hasSolution && recorder.offer(it.eastM, it.northM, state.cutFillMm)) {
+                    trackMarks = recorder.snapshot()
+                }
+            }
+            // Only sample the profile when it is on screen — it is 50 ray casts
+            // into the TIN per tick, and nothing should pay for a hidden pane.
+            if (showProfile) {
+                val p = pose
+                profile = if (p == null) {
+                    ProfileSampler.Profile(emptyList(), Double.NaN, 40.0, 10.0)
+                } else {
+                    ProfileSampler.alongHeading(
+                        feed.designSurface, feed.existingSurface,
+                        p.eastM, p.northM, headingDeg
+                    )
+                }
+            }
             if (auto && !state.canAuto) auto = false      // interlock drops AUTO
-            delay(200)
+            delay(feed.periodMs)
         }
     }
 
     Row(Modifier.fillMaxSize().padding(12.dp)) {
-        Card(Modifier.weight(0.78f).fillMaxHeight()) {
-            CutFillMap(state, Modifier.fillMaxSize().padding(8.dp))
+        Column(Modifier.weight(0.78f).fillMaxHeight()) {
+            Card(Modifier.fillMaxWidth().weight(if (showProfile) 0.68f else 1f)) {
+                FieldMapView(
+                    state = state,
+                    outline = feed.fieldOutline,
+                    track = trackMarks,
+                    pose = pose,
+                    modifier = Modifier.fillMaxSize(),
+                    cutFill = feed.cutFillField,
+                    orientation = orientation,
+                    headingDeg = headingDeg,
+                    headingHolding = headingHolding
+                )
+            }
+            if (showProfile) {
+                Spacer(Modifier.height(10.dp))
+                Card(Modifier.fillMaxWidth().weight(0.32f)) {
+                    ProfileView(
+                        profile = profile,
+                        modifier = Modifier.fillMaxSize(),
+                        bladeElevationM = if (state.hasSolution) state.toolElevationM else Double.NaN
+                    )
+                }
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column(
@@ -65,18 +110,23 @@ fun FieldGradeScreen() {
             PrimaryValue(state)
             AutoButton(auto, state.canAuto) { auto = !auto }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { nudgeMm += 5 }, modifier = Modifier.weight(1f)) { Text("NUDGE +") }
-                Button(onClick = { nudgeMm -= 5 }, modifier = Modifier.weight(1f)) { Text("NUDGE -") }
+                Button(onClick = { feed.nudge(5) }, modifier = Modifier.weight(1f)) { Text("NUDGE +") }
+                Button(onClick = { feed.nudge(-5) }, modifier = Modifier.weight(1f)) { Text("NUDGE -") }
             }
             OutlinedButton(
-                onClick = {
-                    if (state.hasSolution) benchOffsetM = 0.0
-                    nudgeMm = 0
-                },
+                onClick = { feed.rebench() },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("REBENCH") }
+            OutlinedButton(
+                onClick = { orientation = orientation.toggled() },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(orientation.label) }
+            OutlinedButton(
+                onClick = { showProfile = !showProfile },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (showProfile) "PROFILE ON" else "PROFILE OFF") }
             Text("Nudge: $nudgeMm mm", style = MaterialTheme.typography.bodyMedium)
-            StatusPanel(state, auto)
+            StatusPanel(state, auto, feed.label)
         }
     }
 }
@@ -112,7 +162,7 @@ private fun AutoButton(auto: Boolean, canAuto: Boolean, onToggle: () -> Unit) {
 }
 
 @Composable
-private fun StatusPanel(state: GuidanceState, auto: Boolean) {
+private fun StatusPanel(state: GuidanceState, auto: Boolean, sourceLabel: String) {
     Card(shape = RoundedCornerShape(8.dp)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // colour is never the only indicator: always paired with text + icon.
@@ -133,37 +183,12 @@ private fun StatusPanel(state: GuidanceState, auto: Boolean) {
                 autoLine, style = MaterialTheme.typography.bodySmall,
                 color = if (state.canAuto || auto) MaterialTheme.colorScheme.onSurface else Color(0xFFEF6C00)
             )
-        }
-    }
-}
-
-@Composable
-private fun CutFillMap(state: GuidanceState, modifier: Modifier) {
-    Box(modifier, contentAlignment = Alignment.Center) {
-        val fill = when (state.direction) {
-            GuidanceDirection.RAISE -> Color(0x552196F3)    // blue = fill / raise
-            GuidanceDirection.LOWER -> Color(0x55E53935)    // red  = cut / lower
-            GuidanceDirection.ON_GRADE -> Color(0x554CAF50) // green = on grade
-        }
-        Canvas(Modifier.fillMaxSize()) {
-            drawRect(color = fill)
-            val cx = size.width / 2f; val cy = size.height / 2f; val s = size.minDimension * 0.06f
-            drawPath(
-                path = Path().apply {
-                    moveTo(cx, cy - s); lineTo(cx - s, cy + s); lineTo(cx + s, cy + s); close()
-                },
-                color = Color.White
+            // Never let a demo be mistaken for live data.
+            Text(
+                sourceLabel, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            drawLine(Color(0x88FFFFFF), Offset(0f, cy), Offset(size.width, cy), strokeWidth = 2f)
         }
-        Text(
-            when {
-                !state.hasSolution -> state.autoInhibitReason ?: "waiting for GNSS"
-                state.direction == GuidanceDirection.ON_GRADE -> "ON GRADE"
-                else -> "${abs(state.cutFillMm)} mm ${if (state.direction == GuidanceDirection.RAISE) "FILL" else "CUT"}"
-            },
-            color = Color.White, fontWeight = FontWeight.Bold
-        )
     }
 }
 
