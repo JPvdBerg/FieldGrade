@@ -166,3 +166,108 @@ Roughly in order of value:
 Do **not** connect this to hydraulics before item 4 passes and an independent
 reviewer has signed off. The controller is neutral-by-default and well tested in
 software, and that is not the same thing as being safe on a machine.
+
+---
+
+## 8. The control plane (server/)
+
+A separate Ktor service: accounts, machines, per-machine subscriptions, and the
+licences that gate design downloads. It is **not** on the machine-control path —
+see the rule below.
+
+### Run it with nothing installed
+
+```bash
+cd server && ./gradlew devServer      # http://localhost:8080/signup
+```
+
+That starts a **real Postgres, embedded** — no Docker daemon, no install, no
+config — migrates it, generates a throwaway signing key, and serves the web UI
+and the API. Everything is discarded on exit. Tests do the same, which is why
+the suite runs on a laptop with Docker stopped.
+
+Against a real database instead:
+
+```bash
+DATABASE_URL=jdbc:postgresql://host:5432/fieldgrade DATABASE_USER=... DATABASE_PASSWORD=... LICENCE_PRIVATE_KEY=... FIELDGRADE_ENV=production ./gradlew run
+```
+
+In production a missing `LICENCE_PRIVATE_KEY` is **fatal by design**. Booting
+with a throwaway key would mint licences every tablet in the field rejects, and
+the failure would surface days later on a machine instead of at startup.
+
+### The rule that shapes all of it
+
+**Nothing here may gate the machine.** The tablet is supervisory and the ESP32 is
+independently fail-safe, so a dead cell tower must never become a safety event.
+Concretely:
+
+- The tablet works **fully offline, forever**. It verifies a signed licence with
+  a public key compiled into the app — no permission call, ever.
+- Lapsed payment enters a **30-day grace window** in which everything still
+  works. Past that, only *new design downloads* stop. A job already loaded keeps
+  grading.
+- `PAST_DUE` still issues licences. All the leniency lives in the token's grace
+  window, in one place, in one unit. Two cut-offs in two systems would be
+  impossible to reason about.
+- Nothing in the auth path goes anywhere near the 250 ms control loop.
+
+If you change one of those, you are making a safety decision, not a billing one.
+
+### Two credentials, deliberately different
+
+A paired tablet holds both, and conflating them breaks one property or the other:
+
+| | Licence token | Device key |
+|---|---|---|
+| Secret? | No — public-key verifiable | Yes |
+| Purpose | Gate new design downloads | Authenticate uploads |
+| Offline | Forever | n/a |
+| Revocable | Only by expiry | Instantly, server-side |
+
+That split is what lets you kill a stolen tablet's uploads without stopping the
+machine from working.
+
+### Pairing
+
+Owner adds a machine on the web and gets a code like `K7M2-9QXP`, valid 15
+minutes, single use. The operator types it into the tablet, which exchanges it
+for both credentials and then never needs the network again. The code alphabet
+excludes `0 O 1 I L U V` because a human reads it off a screen and types it with
+dusty hands.
+
+### Layout
+
+```
+shared/          licence format + API contracts, compiled into BOTH
+                 server and (later) the Android app, so they cannot drift
+server/
+  domain/        plain data + id/code generation
+  db/            Flyway migrations, plain-JDBC repositories
+  auth/          Argon2id passwords, session tokens (DB stores only a hash)
+  licence/       ECDSA P-256 signing, entitlement rules
+  machine/       machines, trials, pairing
+  http/          JSON API + server-rendered web UI
+```
+
+**Plain JDBC, not an ORM.** The schema is small, the SQL is readable by anyone,
+and Exposed has just shipped a 1.x major whose churn buys nothing here.
+
+**Kotlin 2.3 in `server/`**, ahead of `android/` and `desktop/` at 2.0.10, which
+are pinned by the Compose compiler plugin. Ktor 3.5 ships 2.3 metadata. The
+shared source compiles under both.
+
+### Still to do
+
+1. Upload endpoints — job summary, as-built track, fault events (device-key auth
+   already works). **Do not upload the raw control log**: at 25 Hz it is roughly
+   7 MB/hour, ~140 MB for a working day, and nobody reads it. Keep it on the
+   tablet and pull it on request.
+2. Android: pairing screen + a disk-backed upload queue that never blocks the UI.
+3. Peach Payments — hosted checkout so card data never reaches this server, then
+   charge the stored token for renewals. Needs sandbox credentials.
+4. Getting the home server reachable: **Cloudflare Tunnel** (outbound only, no
+   port forwarding, works behind CGNAT, free TLS). Tailscale separately for your
+   own admin access.
+5. **POPIA** — you will be storing customer identities and farm locations. Worth
+   thinking about before the first real customer, not after.
