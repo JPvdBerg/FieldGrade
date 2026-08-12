@@ -32,3 +32,9 @@ venv/
 .DS_Store
 Thumbs.db
 *.swp
+
+# ---- Vendored ESP32 binaries (extracted from ESP32_S3_Training_Kit.zip) ----
+# Large third-party executables/drivers: kept locally, never committed.
+# See tools/vendor/esp32/README.md for provenance and how to re-extract.
+tools/vendor/esp32/drivers/
+tools/vendor/esp32/esptool/*.exe

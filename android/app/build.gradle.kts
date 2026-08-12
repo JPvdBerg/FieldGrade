@@ -8,6 +8,9 @@ plugins {
 android {
     namespace = "com.fieldgrade.app"
     compileSdk = 35
+    // Pinned to what is installed locally; AGP 8.5.2 would otherwise pull
+    // build-tools 34.0.0, which needs a licence acceptance + download.
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "com.fieldgrade.app"
@@ -27,6 +30,13 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    testOptions {
+        unitTests.all {
+            // The simulation harness prints a trace; without this Gradle swallows it.
+            it.testLogging { showStandardStreams = true }
+        }
     }
 }
 
